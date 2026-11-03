@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: "3.x"
+      wordlist-path:
+        description: Path to the spell-check wordlist, relative to the repository root.
+        required: false
+        type: string
+        default: docs/spellcheck/wordlist.txt
 
 permissions:
   contents: read
@@ -31,6 +36,76 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Check for unused wordlist entries
+        env:
+          WORDLIST_PATH: ${{ inputs.wordlist-path }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          wordlist_path = Path(os.environ["WORDLIST_PATH"])
+
+          if not wordlist_path.is_file():
+              print(f"::error::Wordlist not found: {wordlist_path}")
+              sys.exit(1)
+
+          entries = []
+          for line_number, line in enumerate(
+              wordlist_path.read_text(encoding="utf-8-sig").splitlines(), start=1
+          ):
+              word = line.strip()
+              if not word or word.startswith("#"):
+                  continue
+              entries.append((line_number, word))
+
+          # Only inspect tracked files so generated documentation is ignored.
+          try:
+              markdown_files = subprocess.check_output(
+                  ["git", "ls-files", "-z", "--", "*.md"],
+                  encoding="utf-8",
+              ).split("\0")
+          except subprocess.CalledProcessError:
+              print("::error::Could not list Markdown files with git.")
+              sys.exit(1)
+
+          markdown_text = "\n".join(
+              Path(path).read_text(encoding="utf-8", errors="replace")
+              for path in markdown_files
+              if path
+          )
+
+          unused = []
+          for line_number, word in entries:
+              pattern = re.compile(
+                  r"(?<!\w)" + re.escape(word) + r"(?!\w)",
+                  re.IGNORECASE,
+              )
+              if not pattern.search(markdown_text):
+                  unused.append((line_number, word))
+
+          if not unused:
+              print(f"All {len(entries)} wordlist entries are used.")
+              sys.exit(0)
+
+          print(f"Unused wordlist entries in {wordlist_path}:")
+          for line_number, word in unused:
+              print(f"{wordlist_path}:{line_number}: {word}")
+              print(
+                  f"::error file={wordlist_path},line={line_number},"
+                  f"title=Unused wordlist entry::{word}"
+              )
+
+          sys.exit(1)
+          PY
+
       - uses: rojopolis/spellcheck-github-actions@v0
         with:
           output_file: spellcheck-output.txt
@@ -43,9 +118,6 @@ jobs:
           archive: false
 
       - uses: actions/configure-pages@v6
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ inputs.python-version }}
       - run: pip install zensical
       - run: zensical build --strict --clean --config-file="${{ inputs.config-file }}"
       - uses: actions/upload-pages-artifact@v5

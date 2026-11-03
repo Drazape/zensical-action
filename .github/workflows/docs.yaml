@@ -35,6 +35,7 @@ jobs:
         with:
           output_file: spellcheck-output.txt
           task_name: Markdown
+          config_path: docs/spellcheck/config.yaml
       - uses: actions/upload-artifact@v7
         if: '!cancelled()'
         with:
